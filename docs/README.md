@@ -61,9 +61,9 @@ Live enrollment requires:
 
 Module-level dependencies (see `go.mod`):
 
-- Go `1.26.5`;
+- Go `1.26.8`;
 - `github.com/keppin-oss/cng v0.1.2` (Windows CNG key primitives);
-- `golang.org/x/sys v0.28.0`.
+- `golang.org/x/sys v0.48.0`.
 
 ## 5. Installation / import
 
