@@ -21,8 +21,10 @@ var ErrCleanupFailed = errors.New("enterprise cleanup failed")
 // persisted enrollment metadata. Cleanup refuses to delete either artifact.
 var ErrOwnershipMismatch = errors.New("ownership could not be verified; refusing to delete")
 
-// errCertNotFound and errKeyNotFound are internal signals that an artifact is
-// already absent, so cleanup can be treated as idempotent.
+// errCertNotFound is an internal signal that the certificate is already
+// absent, so cleanup can be treated as idempotent. errKeyNotFound is an
+// internal signal that the CNG key was not found or not accessible and nothing
+// was deleted; it does not prove that the key is absent.
 var (
 	errCertNotFound = errors.New("certificate not found")
 	errKeyNotFound  = errors.New("key not found")
@@ -77,7 +79,8 @@ type certStore interface {
 // keyRemover abstracts CNG key removal.
 type keyRemover interface {
 	// DeleteCNGKey deletes the CNG key identified by provider and container.
-	// It returns errKeyNotFound when the key does not already exist.
+	// It returns errKeyNotFound when the key was not found or not accessible;
+	// in that case nothing was deleted and the key's absence is not proven.
 	DeleteCNGKey(provider, container string) error
 }
 
@@ -88,6 +91,11 @@ type keyRemover interface {
 // without re-verifying ownership. Cleanup is best-effort and not transactional;
 // it deletes only the artifacts this module manages and does not roll back every
 // side effect of certreq.exe.
+//
+// Uninstall is idempotent: it also returns nil when CNG reports the key as not
+// found, which covers a key that is absent and one that could not be opened
+// or is not accessible to the caller. A nil return therefore does not certify
+// that the key was deleted.
 func Uninstall(info CleanupInfo) error {
 	return runCleanup(winStore{}, winKeyRemover{}, info)
 }
@@ -149,8 +157,8 @@ func runCleanup(store certStore, keys keyRemover, info CleanupInfo) error {
 	return removeKey(keys, info)
 }
 
-// removeKey deletes the exact key described by info, treating an already-absent
-// key as idempotent success.
+// removeKey deletes the exact key described by info, treating errKeyNotFound
+// (key not found or not accessible, nothing deleted) as idempotent success.
 func removeKey(keys keyRemover, info CleanupInfo) error {
 	if keys == nil {
 		return fmt.Errorf("%w: no key removal implementation available", ErrCleanupFailed)

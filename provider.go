@@ -221,16 +221,15 @@ func (p *Provider) newKeyContainerName() (string, error) {
 	return p.keyContainer()
 }
 
-// cleanupOwnedKey removes the exact owned key container. It reports whether the
-// key was removed and any error encountered.
+// cleanupOwnedKey removes the exact owned key container. It reports removed
+// only when the delete call succeeded. errKeyNotFound is returned as an error,
+// not as removal: the key was not found or not accessible, nothing was deleted,
+// and its absence is not proven.
 func (p *Provider) cleanupOwnedKey(container string) (bool, error) {
 	if p.keys == nil {
 		return false, errors.New("no key removal implementation available")
 	}
 	if err := p.keys.DeleteCNGKey(expectedCNGProvider, container); err != nil {
-		if errors.Is(err, errKeyNotFound) {
-			return true, nil
-		}
 		return false, err
 	}
 	return true, nil
