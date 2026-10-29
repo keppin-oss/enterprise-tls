@@ -62,7 +62,7 @@ Live enrollment requires:
 Module-level dependencies (see `go.mod`):
 
 - Go `1.26.8`;
-- `github.com/keppin-oss/cng v0.1.2` (Windows CNG key primitives);
+- `github.com/keppin-oss/cng v0.2.0` (Windows CNG key primitives);
 - `golang.org/x/sys v0.48.0`.
 
 ## 5. Installation / import
@@ -259,6 +259,11 @@ protected by the caller. The behavior depends on the state of the certificate:
 - When the certificate is not found, the provider and container name from the
   metadata are used to attempt key deletion; ownership of the absent
   certificate's key is not independently reconstructed here.
+
+`Uninstall` is idempotent for an already-absent key: it also returns `nil` when
+CNG reports the key as not found, which covers a key that is absent **or** one
+that could not be opened / is not accessible to the caller. A `nil` return
+therefore does **not** certify that the key was deleted.
 
 Fabricated, substituted, or stale metadata can therefore direct a privileged
 deletion. The uninstall example treats its JSON file as trusted administrative

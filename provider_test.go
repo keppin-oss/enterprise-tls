@@ -314,6 +314,31 @@ func TestEnroll_CleanupFailureObservable(t *testing.T) {
 	}
 }
 
+// errKeyNotFound means "not found or not accessible; nothing deleted", so the
+// failure cleanup must not attest removal.
+func TestEnroll_SubmitFailureKeyNotFoundIsNotRemoved(t *testing.T) {
+	key := mustRSAKey(t)
+	fr := &fakeRunner{t: t, key: key, submitErr: errors.New("submit failed")}
+	p := New(Config{CA: "ca1\\RootCA"})
+	p.runner = fr
+	p.keys = &fakeKeyRemover{err: errKeyNotFound}
+	pinKeyContainer(p)
+
+	res, err := p.Enroll(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if res.KeyState != KeyStatePresent {
+		t.Fatalf("expected KeyStatePresent, got %s", res.KeyState)
+	}
+	if !errors.Is(res.KeyCleanupErr, errKeyNotFound) {
+		t.Fatalf("expected KeyCleanupErr to preserve errKeyNotFound, got %v", res.KeyCleanupErr)
+	}
+	if res.KeyContainer != testKeyContainer {
+		t.Fatalf("expected key container %q for retry, got %q", testKeyContainer, res.KeyContainer)
+	}
+}
+
 func TestEnroll_ContainerMismatchFailsClosed(t *testing.T) {
 	key := mustRSAKey(t)
 	root, rootKey := rootCA(t)

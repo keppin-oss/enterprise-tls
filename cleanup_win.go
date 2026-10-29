@@ -219,7 +219,8 @@ func (winKeyRemover) DeleteCNGKey(provider, container string) error {
 	return mapCNGError(windowscng.Delete(container))
 }
 
-// mapCNGError translates the shared windowscng missing-key sentinel into the
+// mapCNGError translates the shared windowscng.ErrKeyNotFound sentinel (key
+// not found or not accessible; nothing deleted, absence not proven) into the
 // Enterprise-TLS errKeyNotFound contract. Other errors (permission, provider,
 // corruption, unexpected failures) are passed through unchanged and are never
 // converted into not-found.
