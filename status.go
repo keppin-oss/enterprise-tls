@@ -15,8 +15,8 @@ const (
 	StatusUnknown Status = iota
 	// StatusNotConfigured means the required CA configuration is missing.
 	StatusNotConfigured
-	// StatusUnavailable means certreq.exe or the Enterprise CA infrastructure
-	// could not be reached.
+	// StatusUnavailable means certreq.exe is missing. Network/RPC failures
+	// remain enrollment-failed and do not authorize fallback.
 	StatusUnavailable
 	// StatusEnrollmentFailed means enrollment failed. This includes local errors
 	// that occur before or around the tool run (for example file or request
@@ -33,6 +33,13 @@ const (
 	// the cleanup metadata required for later safe removal could not be
 	// captured. The caller must treat this as an observable orphan state.
 	StatusEnrollmentIncomplete
+	// StatusEnrollmentPending means the CA accepted the request but left it
+	// pending (for example manager approval): certreq -submit succeeded without
+	// returning a certificate. It is not a failure. The key, the request object
+	// in LocalMachine\REQUEST and the attempt files are kept; Result.CA and
+	// Result.RequestID identify the request. Do not delete or resubmit: after the
+	// PKI decides, the request can be retrieved (certreq -retrieve) and accepted.
+	StatusEnrollmentPending
 )
 
 func (s Status) String() string {
@@ -49,6 +56,8 @@ func (s Status) String() string {
 		return "success"
 	case StatusEnrollmentIncomplete:
 		return "enrollment-incomplete"
+	case StatusEnrollmentPending:
+		return "enrollment-pending"
 	default:
 		return "unknown"
 	}
@@ -59,9 +68,8 @@ func (s Status) String() string {
 var (
 	// ErrNotConfigured indicates required Enterprise CA configuration is missing.
 	ErrNotConfigured = errors.New("enterprise enrollment is not configured")
-	// ErrUnavailable indicates certreq.exe or the Enterprise CA infrastructure
-	// could not be reached.
-	ErrUnavailable = errors.New("enterprise CA infrastructure or tool is unavailable")
+	// ErrUnavailable indicates that the required enrollment tool is missing.
+	ErrUnavailable = errors.New("enterprise enrollment tool is unavailable")
 	// ErrEnrollmentFailed indicates enrollment was attempted but failed.
 	ErrEnrollmentFailed = errors.New("enterprise enrollment was attempted but failed")
 	// ErrInvalidCertificate indicates the returned certificate material is
@@ -70,6 +78,10 @@ var (
 	// ErrEnrollmentIncomplete indicates a valid certificate was installed but
 	// the cleanup metadata required for later safe removal is missing.
 	ErrEnrollmentIncomplete = errors.New("enrollment installed a certificate but cleanup metadata is incomplete")
+	// ErrEnrollmentPending indicates the request is pending at the CA. It does
+	// not match ErrEnrollmentFailed: failure handling (cleanup, retry with a
+	// new key, fallback) must not run for a pending request.
+	ErrEnrollmentPending = errors.New("enterprise enrollment request is pending at the CA")
 )
 
 // KeyState classifies what is known about the key container generated for an
@@ -88,6 +100,10 @@ const (
 	// KeyStateUnproven means key ownership could not be proven; the caller must
 	// not attempt to delete the key.
 	KeyStateUnproven
+	// KeyStateRetained means the owned key exists and must be kept: the request
+	// is pending at the CA and the key is needed to accept a later issuance.
+	// Unlike KeyStatePresent it does not invite a cleanup retry.
+	KeyStateRetained
 )
 
 func (s KeyState) String() string {
@@ -98,6 +114,8 @@ func (s KeyState) String() string {
 		return "present"
 	case KeyStateUnproven:
 		return "unproven"
+	case KeyStateRetained:
+		return "retained"
 	default:
 		return "none"
 	}
@@ -132,6 +150,19 @@ type Result struct {
 	// KeyCleanupErr, when non-nil, records a key-removal failure so it is not
 	// hidden behind the primary enrollment error.
 	KeyCleanupErr error
+	// ArtifactDirectory is retained on uncertain process quiescence and on a
+	// pending request. It contains the attempt files, not authorization to
+	// replay or delete.
+	ArtifactDirectory string
+	// CA is the CA configuration the request was submitted to, and RequestID
+	// the CA request ID read from certreq -submit output (0 when unknown).
+	// Both are set on every result that follows a submit which printed an ID:
+	// denied, pending, issued, and later validation/accept failures or success.
+	// They stay unset when submit never ran or printed no ID; a pending result
+	// always carries CA, with RequestID 0 if the ID could not be read.
+	// A RequestID is meaningful only together with CA.
+	CA        string
+	RequestID int
 }
 
 // Error implements error, allowing a Result to be returned directly as the

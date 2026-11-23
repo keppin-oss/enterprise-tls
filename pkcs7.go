@@ -1,9 +1,11 @@
 package enterprise
 
 import (
+	"bytes"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/base64"
+	"encoding/pem"
 	"fmt"
 )
 
@@ -31,7 +33,8 @@ type pkcs7SignedData struct {
 
 // parsePKCS7Certificates extracts every certificate embedded in a PKCS#7
 // SignedData structure (the certreq.exe "certchainfileout" format). The input
-// may be raw DER or base64-encoded DER.
+// may be raw DER, base64-encoded DER, or a single PEM block (see
+// decodePKCS7DER for the exact policy).
 func parsePKCS7Certificates(data []byte) ([]*x509.Certificate, error) {
 	der, err := decodePKCS7DER(data)
 	if err != nil {
@@ -99,15 +102,87 @@ func decodeCertElements(b []byte) ([]asn1.RawValue, error) {
 	return out, nil
 }
 
+// pkcs7PEMLabels are the PEM labels accepted for a chain file. certreq.exe
+// labels its PKCS#7 output "CERTIFICATE"; "PKCS7" is the RFC 7468 label.
+var pkcs7PEMLabels = map[string]bool{"CERTIFICATE": true, "PKCS7": true}
+
+// chainWhitespace is the whitespace tolerated around a chain file encoding:
+// space, tab, CR and LF (not VT or FF).
+const chainWhitespace = " \t\r\n"
+
+// decodePKCS7DER returns the DER ContentInfo of a chain file. Exactly one of
+// these encodings is accepted, with nothing around it but chainWhitespace:
+//
+//   - raw DER;
+//   - a single PEM block labelled "CERTIFICATE" or "PKCS7", without headers;
+//   - bare base64 of the DER.
+//
+// In every form the DER must be a single ContentInfo. Around raw DER, trailing
+// whitespace is recognised only after the end given by the encoded length, so
+// content bytes that happen to equal a whitespace byte are never trimmed.
+// Anything else (text before or after the PEM block, several blocks, other
+// labels, PEM headers, trailing bytes) is rejected rather than interpreted.
+// The SignedData content type is enforced by the caller.
 func decodePKCS7DER(data []byte) ([]byte, error) {
-	if _, err := asn1.Unmarshal(data, &pkcs7ContentInfo{}); err == nil {
-		return data, nil
+	data = bytes.TrimLeft(data, chainWhitespace)
+	if len(data) > 0 && data[0] == 0x30 {
+		rest, err := asn1.Unmarshal(data, &pkcs7ContentInfo{})
+		if err != nil {
+			return nil, fmt.Errorf("decode PKCS#7 ContentInfo: %w", err)
+		}
+		if len(bytes.TrimLeft(rest, chainWhitespace)) != 0 {
+			return nil, fmt.Errorf("unexpected bytes after the PKCS#7 ContentInfo")
+		}
+		return data[:len(data)-len(rest)], nil
 	}
-	trimmed := stripASCIIWhitespace(data)
-	decoded := make([]byte, base64.StdEncoding.DecodedLen(len(trimmed)))
-	n, err := base64.StdEncoding.Decode(decoded, trimmed)
+	trimmed := bytes.TrimRight(data, chainWhitespace)
+	if bytes.HasPrefix(trimmed, []byte("-----BEGIN ")) {
+		return decodePKCS7PEM(trimmed)
+	}
+	clean := stripASCIIWhitespace(trimmed)
+	decoded := make([]byte, base64.StdEncoding.DecodedLen(len(clean)))
+	n, err := base64.StdEncoding.Decode(decoded, clean)
+	if err != nil || n == 0 {
+		return nil, fmt.Errorf("PKCS#7 data is not DER, PEM or base64")
+	}
+	return singleContentInfo(decoded[:n])
+}
+
+// decodePKCS7PEM decodes data that starts with a PEM boundary and must contain
+// exactly one block. Counting the boundaries matters: on a malformed block
+// pem.Decode silently moves on to the next one.
+func decodePKCS7PEM(data []byte) ([]byte, error) {
+	if bytes.Count(data, []byte("-----BEGIN ")) != 1 || bytes.Count(data, []byte("-----END ")) != 1 {
+		return nil, fmt.Errorf("PKCS#7 PEM data must contain exactly one PEM block")
+	}
+	block, rest := pem.Decode(data)
+	if block == nil {
+		return nil, fmt.Errorf("malformed PEM block in PKCS#7 data")
+	}
+	if len(bytes.Trim(rest, chainWhitespace)) != 0 {
+		return nil, fmt.Errorf("unexpected data after the PKCS#7 PEM block")
+	}
+	if !pkcs7PEMLabels[block.Type] {
+		return nil, fmt.Errorf("unsupported PEM label %q for PKCS#7 data", block.Type)
+	}
+	if len(block.Headers) != 0 {
+		return nil, fmt.Errorf("PEM headers are not supported for PKCS#7 data")
+	}
+	der, err := singleContentInfo(block.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("PKCS#7 data is not DER or base64")
+		return nil, fmt.Errorf("PEM block %q: %w", block.Type, err)
 	}
-	return decoded[:n], nil
+	return der, nil
+}
+
+// singleContentInfo checks that der is exactly one ContentInfo.
+func singleContentInfo(der []byte) ([]byte, error) {
+	rest, err := asn1.Unmarshal(der, &pkcs7ContentInfo{})
+	if err != nil {
+		return nil, fmt.Errorf("decode PKCS#7 ContentInfo: %w", err)
+	}
+	if len(rest) != 0 {
+		return nil, fmt.Errorf("%d unexpected bytes after the PKCS#7 ContentInfo", len(rest))
+	}
+	return der, nil
 }

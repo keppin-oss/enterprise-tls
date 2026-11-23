@@ -32,13 +32,16 @@ func classify(res *enterprise.Result, err error) {
 	case enterprise.StatusNotConfigured:
 		fmt.Println("decision: fix configuration before retrying")
 	case enterprise.StatusUnavailable:
-		fmt.Println("decision: infrastructure/tool unavailable (orchestrator may fall back)")
+		fmt.Println("decision: enrollment tool missing (fallback requires explicit consumer policy)")
 	case enterprise.StatusEnrollmentFailed:
 		fmt.Println("decision: enrollment attempted but rejected/failed")
 	case enterprise.StatusInvalidCertificate:
 		fmt.Println("decision: returned material failed validation")
 	case enterprise.StatusEnrollmentIncomplete:
 		fmt.Println("decision: certificate installed; cleanup metadata incomplete")
+	case enterprise.StatusEnrollmentPending:
+		fmt.Printf("decision: request pending at %s (RequestId %d); keep key %s, notify the PKI, do not resubmit\n",
+			res.CA, res.RequestID, res.KeyContainer)
 	default:
 		fmt.Println("decision: unknown")
 	}
@@ -54,6 +57,8 @@ func classify(res *enterprise.Result, err error) {
 		fmt.Println("sentinel: ErrInvalidCertificate")
 	case errors.Is(err, enterprise.ErrEnrollmentIncomplete):
 		fmt.Println("sentinel: ErrEnrollmentIncomplete")
+	case errors.Is(err, enterprise.ErrEnrollmentPending):
+		fmt.Println("sentinel: ErrEnrollmentPending")
 	}
 
 	// Key state drives ownership decisions; it must never trigger deletion of

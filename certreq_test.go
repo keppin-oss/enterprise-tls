@@ -18,17 +18,23 @@ func TestClassifyToolError_MissingTool(t *testing.T) {
 	}
 }
 
-// TestClassifyToolError_SubmitUnavailable verifies that a CA-reachability
-// HRESULT maps to "unavailable" only in the -submit phase.
-func TestClassifyToolError_SubmitUnavailable(t *testing.T) {
-	unavailable := []int{
+func TestClassifyToolError_UncertainMissingToolDoesNotAuthorizeFallback(t *testing.T) {
+	err := errors.Join(exec.ErrNotFound, ErrProcessQuiescence)
+	if got := classifyToolError(phaseSubmit, -1, err); got != StatusEnrollmentFailed {
+		t.Fatalf("uncertain process state became fallback-eligible: %s", got)
+	}
+}
+
+// Reachability HRESULTs are ambiguous and never authorize fallback.
+func TestClassifyToolError_SubmitReachabilityFailsClosed(t *testing.T) {
+	codes := []int{
 		int(uint32(0x800706BA)), // RPC_S_SERVER_UNAVAILABLE
 		int(uint32(0x800706D9)), // RPC_S_NO_ENDPOINTS
 		int(uint32(0x80072EE7)), // ERROR_WINHTTP_NAME_NOT_RESOLVED
 	}
-	for _, code := range unavailable {
-		if got := classifyToolError(phaseSubmit, code, nil); got != StatusUnavailable {
-			t.Errorf("submit + %#x: expected unavailable, got %s", uint32(code), got)
+	for _, code := range codes {
+		if got := classifyToolError(phaseSubmit, code, nil); got != StatusEnrollmentFailed {
+			t.Errorf("submit + %#x: expected enrollment-failed, got %s", uint32(code), got)
 		}
 	}
 }

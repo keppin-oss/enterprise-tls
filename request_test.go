@@ -40,6 +40,54 @@ func TestBuildRequestINF(t *testing.T) {
 	}
 }
 
+// infSection returns the lines of the named INF section (without the header).
+func infSection(inf, name string) []string {
+	var out []string
+	in := false
+	for _, line := range strings.Split(inf, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			in = line == "["+name+"]"
+			continue
+		}
+		if in && line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// certreq.exe rejects CertificateTemplate under [NewRequest] (ERROR_INVALID_DATA
+// on "certreq -new"); it must be a [RequestAttributes] entry.
+func TestBuildRequestINF_TemplateIsRequestAttribute(t *testing.T) {
+	inf := BuildRequestINF(Config{CA: "ca1\\RootCA", Template: "WebServer"}, "keppin-enterprise-tls-test")
+
+	for _, line := range infSection(inf, "NewRequest") {
+		if strings.HasPrefix(line, "CertificateTemplate") {
+			t.Fatalf("CertificateTemplate must not be in [NewRequest]:\n%s", inf)
+		}
+	}
+	for _, line := range infSection(inf, "Extensions") {
+		if strings.HasPrefix(line, "CertificateTemplate") {
+			t.Fatalf("CertificateTemplate must not be in [Extensions]:\n%s", inf)
+		}
+	}
+	attrs := infSection(inf, "RequestAttributes")
+	if len(attrs) != 1 || attrs[0] != "CertificateTemplate = WebServer" {
+		t.Fatalf("expected exactly the template in [RequestAttributes], got %q\n%s", attrs, inf)
+	}
+	if n := strings.Count(inf, "CertificateTemplate"); n != 1 {
+		t.Fatalf("expected one CertificateTemplate entry, got %d\n%s", n, inf)
+	}
+}
+
+func TestBuildRequestINF_NoTemplateNoRequestAttributes(t *testing.T) {
+	inf := BuildRequestINF(Config{CA: "ca1\\RootCA"}, "")
+	if strings.Contains(inf, "[RequestAttributes]") {
+		t.Errorf("[RequestAttributes] should be omitted when no template is set:\n%s", inf)
+	}
+}
+
 func TestBuildRequestINF_KeyContainer(t *testing.T) {
 	inf := BuildRequestINF(Config{CA: "ca1\\RootCA"}, "keppin-enterprise-tls-test")
 	if !strings.Contains(inf, "KeyContainer = \"keppin-enterprise-tls-test\"") {

@@ -5,13 +5,21 @@ import (
 	"context"
 	"crypto/rsa"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/pem"
 	"errors"
+	"fmt"
+	"math/big"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/keppin-oss/cng/windowscng"
 )
 
 type fakeRunner struct {
@@ -29,6 +37,10 @@ type fakeRunner struct {
 	newCode    int // exit code for a -new failure (default 1)
 	submitCode int
 	acceptCode int
+	// submitPending makes -submit succeed without writing any output file, as
+	// certreq does for a request left pending by the CA.
+	submitPending bool
+	submitStdout  string // stdout returned by -submit (success, pending or failure)
 }
 
 func (f *fakeRunner) Run(_ context.Context, name string, args ...string) (string, string, int, error) {
@@ -46,7 +58,10 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) (string
 		return "", "", 0, nil
 	case slices.Contains(args, "-submit"):
 		if f.submitErr != nil {
-			return "", "submit failed", failCode(f.submitCode), f.submitErr
+			return f.submitStdout, "submit failed", failCode(f.submitCode), f.submitErr
+		}
+		if f.submitPending {
+			return f.submitStdout, "", 0, nil
 		}
 		tmpl := f.leafTmpl
 		if tmpl == nil {
@@ -64,12 +79,12 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) (string
 		}
 		chain := f.chainRaw
 		if chain == nil {
-			chain = []byte(base64.StdEncoding.EncodeToString(buildPKCS7(f.t, leaf)))
+			chain = certreqPEM(buildPKCS7(f.t, leaf))
 		}
 		if err := os.WriteFile(chainPath, chain, 0o600); err != nil {
 			return "", "", 1, err
 		}
-		return "", "", 0, nil
+		return f.submitStdout, "", 0, nil
 	case slices.Contains(args, "-accept"):
 		if f.acceptErr != nil {
 			return "", "accept failed", failCode(f.acceptCode), f.acceptErr
@@ -77,6 +92,30 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) (string
 		return "", "", 0, nil
 	}
 	return "", "", 0, nil
+}
+
+// certreqPEM armors der the way certreq.exe -submit writes the chain file:
+// PEM labelled "CERTIFICATE" with CRLF line endings.
+func certreqPEM(der []byte) []byte {
+	armored := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	return bytes.ReplaceAll(armored, []byte("\n"), []byte("\r\n"))
+}
+
+// intermediateCA issues a CA certificate under root, for chains that need an
+// intermediate.
+func intermediateCA(t *testing.T, root *x509.Certificate, rootKey *rsa.PrivateKey) (*x509.Certificate, *rsa.PrivateKey) {
+	t.Helper()
+	key := mustRSAKey(t)
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(10),
+		Subject:               pkix.Name{CommonName: "Test Intermediate"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	return issueCert(t, tmpl, root, rootKey, &key.PublicKey), key
 }
 
 func failCode(c int) int {
@@ -148,11 +187,109 @@ func TestEnroll_Success(t *testing.T) {
 	if !strings.Contains(fr.calls[0], "-new -machine -q") {
 		t.Fatalf("first call should be -new: %s", fr.calls[0])
 	}
-	if !strings.Contains(fr.calls[1], "-config ca1\\RootCA") {
-		t.Fatalf("second call should carry -config: %s", fr.calls[1])
+	if !strings.Contains(fr.calls[1], "-submit -q -config ca1\\RootCA") {
+		t.Fatalf("second call should be -submit with -config: %s", fr.calls[1])
+	}
+	// certreq.exe rejects -machine on -submit ("unexpected argument").
+	if strings.Contains(fr.calls[1], "-machine") {
+		t.Fatalf("-submit must not carry -machine: %s", fr.calls[1])
 	}
 	if !strings.Contains(fr.calls[2], "-accept -machine -q") {
 		t.Fatalf("third call should be -accept: %s", fr.calls[2])
+	}
+}
+
+// The leaf is issued by an intermediate that only the certreq-style PEM chain
+// file carries: Enroll succeeds only if it reads that chain.
+func TestEnroll_PEMChainSuppliesIntermediate(t *testing.T) {
+	key := mustRSAKey(t)
+	root, rootKey := rootCA(t)
+	inter, interKey := intermediateCA(t, root, rootKey)
+	fr := &fakeRunner{t: t, key: key, root: inter, rootKey: interKey, chainRaw: certreqPEM(buildPKCS7(t, inter))}
+
+	p := New(Config{CA: "ca1\\RootCA"})
+	p.runner = fr
+	p.validateOpts.Roots = rootsPool(root)
+	p.store = enrollStore{kpi: keyProvInfo{provider: expectedCNGProvider, containerName: testKeyContainer}}
+	p.keys = &fakeKeyRemover{}
+	pinKeyContainer(p)
+
+	res, err := p.Enroll(context.Background())
+	if err != nil {
+		t.Fatalf("Enroll returned error: %v", err)
+	}
+	if res.Status != StatusSuccess {
+		t.Fatalf("expected success, got %s", res.Status)
+	}
+}
+
+// A PEM chain whose intermediate does not lead to a trusted root is rejected
+// before -accept, and the key created for the attempt is removed.
+func TestEnroll_PEMChainUntrusted(t *testing.T) {
+	key := mustRSAKey(t)
+	root, rootKey := rootCA(t)
+	inter, interKey := intermediateCA(t, root, rootKey)
+	otherRoot, _ := rootCA(t)
+	fr := &fakeRunner{t: t, key: key, root: inter, rootKey: interKey, chainRaw: certreqPEM(buildPKCS7(t, inter))}
+
+	p := New(Config{CA: "ca1\\RootCA"})
+	p.runner = fr
+	p.validateOpts.Roots = rootsPool(otherRoot)
+	p.store = enrollStore{kpi: keyProvInfo{provider: expectedCNGProvider, containerName: testKeyContainer}}
+	keys := &fakeKeyRemover{}
+	p.keys = keys
+	pinKeyContainer(p)
+
+	res, err := p.Enroll(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if res.Status != StatusInvalidCertificate {
+		t.Fatalf("expected invalid-certificate, got %s", res.Status)
+	}
+	for _, c := range fr.calls {
+		if strings.Contains(c, "-accept") {
+			t.Fatalf("-accept must not run for an untrusted chain: %v", fr.calls)
+		}
+	}
+	if res.KeyState != KeyStateRemoved || len(keys.deleted) != 1 || keys.deleted[0] != testKeyContainer {
+		t.Fatalf("expected exact key %q removed, got state %s, deleted %v", testKeyContainer, res.KeyState, keys.deleted)
+	}
+}
+
+// A chain file that breaks the PEM policy (here: a second block after a
+// usable one) is invalid-certificate, not a partially read chain.
+func TestEnroll_PEMChainTwoBlocks(t *testing.T) {
+	key := mustRSAKey(t)
+	root, rootKey := rootCA(t)
+	inter, interKey := intermediateCA(t, root, rootKey)
+	chain := append(certreqPEM(buildPKCS7(t, inter)), certreqPEM(buildPKCS7(t))...)
+	fr := &fakeRunner{t: t, key: key, root: inter, rootKey: interKey, chainRaw: chain}
+
+	p := New(Config{CA: "ca1\\RootCA"})
+	p.runner = fr
+	p.validateOpts.Roots = rootsPool(root)
+	// A fake store keeps the test off the native store even if a regression
+	// lets the chain through to -accept and the key association lookup.
+	p.store = enrollStore{kpi: keyProvInfo{provider: expectedCNGProvider, containerName: testKeyContainer}}
+	keys := &fakeKeyRemover{}
+	p.keys = keys
+	pinKeyContainer(p)
+
+	res, err := p.Enroll(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if res.Status != StatusInvalidCertificate || !errors.Is(err, ErrInvalidCertificate) {
+		t.Fatalf("expected invalid-certificate, got %s (%v)", res.Status, err)
+	}
+	for _, c := range fr.calls {
+		if strings.Contains(c, "-accept") {
+			t.Fatalf("-accept must not run for a rejected chain file: %v", fr.calls)
+		}
+	}
+	if res.KeyState != KeyStateRemoved || len(keys.deleted) != 1 || keys.deleted[0] != testKeyContainer {
+		t.Fatalf("expected exact key %q removed, got state %s, deleted %v", testKeyContainer, res.KeyState, keys.deleted)
 	}
 }
 
@@ -235,6 +372,33 @@ func TestEnroll_SubmitFailureCleansUpOwnedKey(t *testing.T) {
 	}
 	if len(keys.deleted) != 1 || keys.deleted[0] != testKeyContainer {
 		t.Fatalf("expected exact key %q deleted, got %v", testKeyContainer, keys.deleted)
+	}
+}
+
+// When the owned key cannot be removed, Result.KeyCleanupErr carries the native
+// NCrypt cause: not-found or not accessible (NTE_BAD_KEYSET) is not removal.
+func TestEnroll_KeyCleanupErrKeepsNativeCause(t *testing.T) {
+	key := mustRSAKey(t)
+	fr := &fakeRunner{t: t, key: key, submitErr: errors.New("submit failed")}
+	p := New(Config{CA: "ca1\\RootCA"})
+	p.runner = fr
+	p.keys = &fakeKeyRemover{err: fmt.Errorf("%w: %w", errKeyNotFound,
+		&windowscng.NCryptError{Op: "NCryptOpenKey", Code: windowscng.NTEBadKeyset})}
+	pinKeyContainer(p)
+
+	res, err := p.Enroll(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if res.KeyState != KeyStatePresent {
+		t.Fatalf("expected KeyStatePresent, got %s", res.KeyState)
+	}
+	if !errors.Is(res.KeyCleanupErr, errKeyNotFound) {
+		t.Fatalf("expected errKeyNotFound in KeyCleanupErr, got %v", res.KeyCleanupErr)
+	}
+	var ne *windowscng.NCryptError
+	if !errors.As(res.KeyCleanupErr, &ne) || ne.Code != windowscng.NTEBadKeyset {
+		t.Fatalf("expected NCryptError NTE_BAD_KEYSET in KeyCleanupErr, got %v", res.KeyCleanupErr)
 	}
 }
 
@@ -419,7 +583,7 @@ func TestEnroll_EnrollmentFailed(t *testing.T) {
 	}
 }
 
-func TestEnroll_SubmitUnavailable(t *testing.T) {
+func TestEnroll_SubmitRPCDoesNotAuthorizeFallback(t *testing.T) {
 	key := mustRSAKey(t)
 	fr := &fakeRunner{t: t, key: key, submitErr: errors.New("CA unreachable"), submitCode: int(uint32(0x800706BA))}
 	p := New(Config{CA: "ca1\\RootCA"})
@@ -430,11 +594,11 @@ func TestEnroll_SubmitUnavailable(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if res.Status != StatusUnavailable {
-		t.Fatalf("expected unavailable, got %s", res.Status)
+	if res.Status != StatusEnrollmentFailed {
+		t.Fatalf("expected enrollment-failed, got %s", res.Status)
 	}
-	if !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("expected ErrUnavailable, got %v", err)
+	if !errors.Is(err, ErrEnrollmentFailed) || errors.Is(err, ErrUnavailable) {
+		t.Fatalf("expected enrollment failure without fallback, got %v", err)
 	}
 }
 
@@ -680,5 +844,97 @@ func TestParsePKCS7Certificates(t *testing.T) {
 	}
 	if !publicKeysEqual(got[0].PublicKey, leaf.PublicKey) {
 		t.Fatal("public key mismatch")
+	}
+}
+
+// certreq -submit output for a pending request, as observed on it-IT; the
+// RequestId label is not localized.
+const pendingSubmitStdout = "RequestId: 14\r\nRequestId: \"14\"\r\nRichiesta di certificato in sospeso: Accettato all'invio (0)\r\n"
+
+// A pending request (submit exit 0, no certificate file) is not a failure:
+// the key is retained, nothing is accepted, and CA + RequestId are reported.
+func TestEnroll_PendingRetainsKeyAndReportsRequestID(t *testing.T) {
+	key := mustRSAKey(t)
+	fr := &fakeRunner{t: t, key: key, submitPending: true, submitStdout: pendingSubmitStdout}
+	p := New(Config{CA: "ca1\\RootCA"})
+	p.runner = fr
+	keys := &fakeKeyRemover{}
+	p.keys = keys
+
+	res, err := p.Enroll(context.Background())
+	if res.Status != StatusEnrollmentPending || !errors.Is(err, ErrEnrollmentPending) {
+		t.Fatalf("want enrollment-pending, got status=%s err=%v", res.Status, err)
+	}
+	if errors.Is(err, ErrEnrollmentFailed) {
+		t.Fatal("pending must not match ErrEnrollmentFailed")
+	}
+	if res.KeyState != KeyStateRetained || len(keys.deleted) != 0 {
+		t.Fatalf("pending key must be retained, got state=%s deleted=%v", res.KeyState, keys.deleted)
+	}
+	if res.CA != "ca1\\RootCA" || res.RequestID != 14 || res.KeyContainer == "" {
+		t.Fatalf("request identity: CA=%q RequestID=%d container=%q", res.CA, res.RequestID, res.KeyContainer)
+	}
+	for _, c := range fr.calls {
+		if strings.Contains(c, "-accept") {
+			t.Fatal("-accept invoked for a pending request")
+		}
+	}
+	defer os.RemoveAll(res.ArtifactDirectory)
+	if res.ArtifactDirectory == "" {
+		t.Fatal("attempt files not retained for a pending request")
+	}
+	if _, err := os.Stat(filepath.Join(res.ArtifactDirectory, "request.req")); err != nil {
+		t.Fatalf("request file not retained: %v", err)
+	}
+}
+
+// A request denied by the CA keeps the failure path (exact key cleanup) and
+// now carries CA + RequestId for the PKI report.
+func TestEnroll_DeniedReportsRequestID(t *testing.T) {
+	key := mustRSAKey(t)
+	fr := &fakeRunner{t: t, key: key, submitErr: errors.New("denied"), submitCode: int(uint32(0x80094012)),
+		submitStdout: "RequestId: 13\r\nRequestId: \"13\"\r\nCertificato non emesso (Negato) Negato dal modulo criteri\r\n"}
+	p := New(Config{CA: "ca1\\RootCA"})
+	p.runner = fr
+	keys := &fakeKeyRemover{}
+	p.keys = keys
+
+	res, err := p.Enroll(context.Background())
+	if res.Status != StatusEnrollmentFailed || !errors.Is(err, ErrEnrollmentFailed) || errors.Is(err, ErrEnrollmentPending) {
+		t.Fatalf("want enrollment-failed, got status=%s err=%v", res.Status, err)
+	}
+	if res.CA != "ca1\\RootCA" || res.RequestID != 13 {
+		t.Fatalf("request identity: CA=%q RequestID=%d", res.CA, res.RequestID)
+	}
+	if res.KeyState != KeyStateRemoved || len(keys.deleted) != 1 {
+		t.Fatalf("denied: want owned key removed, got state=%s deleted=%v", res.KeyState, keys.deleted)
+	}
+}
+
+func TestParseRequestID(t *testing.T) {
+	for _, tt := range []struct {
+		in   string
+		want int
+	}{
+		{pendingSubmitStdout, 14},
+		{"RequestId: \"7\"\n", 7},
+		{"  RequestId: 42  \r\n", 42},
+		{"Certificato recuperato(Emesso) Emesso\r\n", 0},
+		{"RequestId: abc\n", 0},
+		{"RequestId: 0\n", 0},
+		{"xRequestId: 5\n", 0},
+		{"", 0},
+		{"RequestId: 42", 42},                                      // last line without newline
+		{"RequestId:\r\n42\r\n", 0},                                // ID on the next line is not accepted
+		{"RequestId:\n\n42\n", 0},                                  // nor after a blank line
+		{"RequestId: \"42\r\n", 0},                                 // unpaired opening quote
+		{"RequestId: 42\"\r\n", 0},                                 // unpaired closing quote
+		{"RequestId: 4 2\r\n", 0},                                  // embedded space
+		{"RequestId: x\r\nRequestId: \"9\"\r\n", 9},                // first valid line wins
+		{"Note\r\n RequestId:\t\"11\"\t\r\nRequestId: 12\r\n", 11}, // tabs, quoted, first match
+	} {
+		if got := parseRequestID(tt.in); got != tt.want {
+			t.Errorf("parseRequestID(%q) = %d, want %d", tt.in, got, tt.want)
+		}
 	}
 }

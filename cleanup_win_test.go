@@ -22,6 +22,42 @@ func TestMapCNGError_KeyNotFound(t *testing.T) {
 	}
 }
 
+// The shape windowscng.Delete returns for a key that cannot be opened: the
+// native status as an NCryptError joined with ErrKeyNotFound. Mapping keeps
+// the internal sentinel and both upstream causes.
+func TestMapCNGError_KeyNotFoundKeepsNativeCause(t *testing.T) {
+	upstream := fmt.Errorf("key %q: NCryptOpenKey hr=0x80090016: %w", "k",
+		errors.Join(&windowscng.NCryptError{Op: "NCryptOpenKey", Code: windowscng.NTEBadKeyset}, windowscng.ErrKeyNotFound))
+	err := mapCNGError(upstream)
+	if !errors.Is(err, errKeyNotFound) || !errors.Is(err, windowscng.ErrKeyNotFound) {
+		t.Fatalf("expected both not-found sentinels, got %v", err)
+	}
+	var ne *windowscng.NCryptError
+	if !errors.As(err, &ne) || ne.Code != windowscng.NTEBadKeyset {
+		t.Fatalf("expected NCryptError NTE_BAD_KEYSET in the chain, got %v", err)
+	}
+}
+
+// A permission failure keeps its native code and is never reported as
+// not-found.
+func TestMapCNGError_PermissionNotNotFound(t *testing.T) {
+	upstream := fmt.Errorf("delete key: %w", &windowscng.NCryptError{Op: "NCryptDeleteKey", Code: windowscng.NTEPerm})
+	err := mapCNGError(upstream)
+	if errors.Is(err, errKeyNotFound) || errors.Is(err, windowscng.ErrKeyNotFound) {
+		t.Fatalf("permission failure must not become not-found, got %v", err)
+	}
+	var ne *windowscng.NCryptError
+	if !errors.As(err, &ne) || ne.Code != windowscng.NTEPerm {
+		t.Fatalf("expected NCryptError NTE_PERM in the chain, got %v", err)
+	}
+}
+
+func TestMapCNGError_Nil(t *testing.T) {
+	if err := mapCNGError(nil); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
 func TestMapCNGError_OtherErrorPreserved(t *testing.T) {
 	boom := errors.New("permission denied")
 	err := mapCNGError(boom)

@@ -179,6 +179,7 @@ func readKeyProvInfo(ctx *syscall.CertContext) (keyProvInfo, error) {
 		containerName: utf16StringAt(buf, kpi.containerName),
 		providerType:  kpi.provType,
 		keySpec:       kpi.keySpec,
+		flags:         kpi.flags,
 	}, nil
 }
 
@@ -221,12 +222,14 @@ func (winKeyRemover) DeleteCNGKey(provider, container string) error {
 
 // mapCNGError translates the shared windowscng.ErrKeyNotFound sentinel (key
 // not found or not accessible; nothing deleted, absence not proven) into the
-// Enterprise-TLS errKeyNotFound contract. Other errors (permission, provider,
-// corruption, unexpected failures) are passed through unchanged and are never
-// converted into not-found.
+// Enterprise-TLS errKeyNotFound contract. The original error stays in the
+// chain, so errors.As still finds the *windowscng.NCryptError (for example
+// NTE_BAD_KEYSET) and errors.Is still matches windowscng.ErrKeyNotFound. Other
+// errors (permission, provider, corruption, unexpected failures) are passed
+// through unchanged and are never converted into not-found.
 func mapCNGError(err error) error {
 	if errors.Is(err, windowscng.ErrKeyNotFound) {
-		return errKeyNotFound
+		return fmt.Errorf("%w: %w", errKeyNotFound, err)
 	}
 	return err
 }
