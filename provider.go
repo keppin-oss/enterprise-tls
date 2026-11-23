@@ -7,12 +7,20 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
 // Provider enrolls and validates a machine-scoped localhost certificate from
 // an Enterprise CA using certreq.exe. It is a standalone provider and
 // contains no fallback/orchestration logic.
+//
+// Deprecated: Provider bypasses the enrollment journal and its recovery
+// rules, and starts certreq.exe child processes. Use lifecycle.Enrollment with
+// the native adapters (CNGKeys, NativeRequester, MachineMy, AttemptDeleter,
+// EnrollmentValidator). Provider keeps
+// working in this release and will be removed in a later breaking release.
 type Provider struct {
 	cfg    Config
 	runner runner
@@ -32,6 +40,8 @@ type Provider struct {
 
 // New creates a Provider using the real certreq.exe runner and the native
 // Windows machine certificate store and CNG key providers.
+//
+// Deprecated: use lifecycle.Enrollment with the native adapters; see Provider.
 func New(cfg Config) *Provider {
 	return &Provider{
 		cfg:          cfg,
@@ -51,7 +61,12 @@ func New(cfg Config) *Provider {
 // (see Status). Result.KeyContainer and Result.KeyState describe the state of
 // the key container generated for this attempt across the failure and success
 // paths.
-func (p *Provider) Enroll(ctx context.Context) (*Result, error) {
+//
+// Deprecated: Enroll runs certreq.exe outside the enrollment journal: a crash
+// or a lost result is not recovered by the native state machine, and the
+// barriers of lifecycle.Enrollment (CA_UNKNOWN, never-adopt, binding
+// check) do not apply. Use lifecycle.Enrollment with the native adapters.
+func (p *Provider) Enroll(ctx context.Context) (result *Result, resultErr error) {
 	if !p.cfg.configured() {
 		res := &Result{Status: StatusNotConfigured, Err: fmt.Errorf("%w: CA identifier is empty", ErrNotConfigured)}
 		return res, res
@@ -70,7 +85,23 @@ func (p *Provider) Enroll(ctx context.Context) (*Result, error) {
 		res := &Result{Status: StatusEnrollmentFailed, KeyContainer: container, Err: fmt.Errorf("%w: create temp dir: %v", ErrEnrollmentFailed, err)}
 		return res, res
 	}
-	defer os.RemoveAll(dir)
+	// submitID is the RequestId printed by certreq -submit. Every result returned
+	// after a submit that printed one carries CA + RequestID, whatever happens
+	// later (issued, validation or accept failure, success). A submit that never
+	// ran, or printed no ID, leaves both unset (except pending, see below).
+	var submitID int
+	defer func() {
+		if result != nil && submitID > 0 {
+			result.CA, result.RequestID = p.cfg.CA, submitID
+		}
+		if errors.Is(resultErr, ErrProcessQuiescence) || errors.Is(resultErr, ErrEnrollmentPending) {
+			if result != nil {
+				result.ArtifactDirectory = dir
+			}
+			return
+		}
+		_ = os.RemoveAll(dir)
+	}()
 
 	infPath := filepath.Join(dir, "request.inf")
 	reqPath := filepath.Join(dir, "request.req")
@@ -85,9 +116,14 @@ func (p *Provider) Enroll(ctx context.Context) (*Result, error) {
 	// 1. Generate the machine-scoped key and PKCS#10 request. If -new fails we
 	// cannot prove whether the key was actually created (it may have collided
 	// with a pre-existing container), so fail closed and never delete it.
-	if res := p.certreq(ctx, phaseNew, "-new", "-machine", "-q", infPath, reqPath); res != nil {
+	// A guard block means certreq was never started in this call, so no key
+	// was created for this attempt.
+	if _, res := p.certreq(ctx, phaseNew, "-new", "-machine", "-q", infPath, reqPath); res != nil {
 		res.KeyContainer = container
 		res.KeyState = KeyStateUnproven
+		if errors.Is(res.Err, ErrOperationBlocked) {
+			res.KeyState = KeyStateNone
+		}
 		return res, res
 	}
 
@@ -103,8 +139,31 @@ func (p *Provider) Enroll(ctx context.Context) (*Result, error) {
 	}
 
 	// 2. Submit the request to the Enterprise CA and capture leaf + chain.
-	if res := p.certreq(ctx, phaseSubmit, "-submit", "-machine", "-q", "-config", p.cfg.CA, reqPath, certPath, chainPath); res != nil {
+	// -submit takes no -machine option (certreq.exe rejects it as an
+	// unexpected argument). Submit authenticates with the credentials of the
+	// process running certreq (the computer account when running as SYSTEM);
+	// the machine scope of the key comes from -new -machine, not from submit.
+	submitOut, res := p.certreq(ctx, phaseSubmit, "-submit", "-q", "-config", p.cfg.CA, reqPath, certPath, chainPath)
+	submitID = parseRequestID(submitOut)
+	if res != nil {
 		return p.finishOwnedFailure(res, container)
+	}
+	// A successful submit without a certificate file is a pending request
+	// (observed: exit 0 and no output file; the exit code alone does not
+	// separate pending from issued). Keep the key, the REQUEST object and the
+	// attempt files: the PKI may still issue it.
+	if _, err := os.Stat(certPath); errors.Is(err, os.ErrNotExist) {
+		res := &Result{
+			Status:       StatusEnrollmentPending,
+			Tool:         "certreq.exe",
+			KeyContainer: container,
+			KeyState:     KeyStateRetained,
+			// The request reached the CA, so CA is set even when no
+			// RequestId could be read (RequestID stays 0).
+			CA:  p.cfg.CA,
+			Err: fmt.Errorf("%w: CA %q, RequestId %d", ErrEnrollmentPending, p.cfg.CA, submitID),
+		}
+		return res, res
 	}
 	certData, err := os.ReadFile(certPath)
 	if err != nil {
@@ -151,7 +210,7 @@ func (p *Provider) Enroll(ctx context.Context) (*Result, error) {
 	// 4. Accept/install the certificate into the machine store, binding the
 	// machine-scoped key. This is a host mutation required for normal
 	// provisioning; it is never exercised by ordinary unit tests.
-	if res := p.certreq(ctx, phaseAccept, "-accept", "-machine", "-q", certPath); res != nil {
+	if _, res := p.certreq(ctx, phaseAccept, "-accept", "-machine", "-q", certPath); res != nil {
 		return p.finishOwnedFailure(res, container)
 	}
 
@@ -197,7 +256,7 @@ func (p *Provider) captureCleanupInfo(cert *x509.Certificate, expectedContainer 
 	}
 	kpi, err := p.store.KeyProvInfo(sha256Sum(cert.Raw))
 	if err != nil {
-		return CleanupInfo{}, fmt.Errorf("%w: read installed key association: %v", ErrEnrollmentIncomplete, err)
+		return CleanupInfo{}, fmt.Errorf("%w: read installed key association: %w", ErrEnrollmentIncomplete, err)
 	}
 	if kpi.provider != expectedCNGProvider {
 		return CleanupInfo{}, fmt.Errorf("%w: installed key provider %q does not match expected %q", ErrEnrollmentIncomplete, kpi.provider, expectedCNGProvider)
@@ -240,6 +299,14 @@ func (p *Provider) cleanupOwnedKey(container string) (bool, error) {
 // state (including any cleanup failure) on the result.
 func (p *Provider) finishOwnedFailure(res *Result, container string) (*Result, error) {
 	res.KeyContainer = container
+	// Uncertain quiescence forbids cleanup: report the key as unproven, never
+	// as present-and-retryable, so callers do not attempt the deletion this
+	// error withholds.
+	if errors.Is(res.Err, ErrProcessQuiescence) {
+		res.KeyState = KeyStateUnproven
+		res.KeyCleanupErr = res.Err
+		return res, res
+	}
 	removed, keyErr := p.cleanupOwnedKey(container)
 	switch {
 	case keyErr != nil:
@@ -264,10 +331,11 @@ func (p *Provider) failOwned(container string, status Status, sentinel error, fo
 // returns a non-nil Result only when the tool failed (non-zero exit or spawn
 // error). The phase is passed explicitly so failure classification is
 // phase-aware and never inferred from stderr text.
-func (p *Provider) certreq(ctx context.Context, phase certreqPhase, args ...string) *Result {
-	_, stderr, code, err := p.runner.Run(ctx, "certreq.exe", args...)
+// The tool's stdout is returned in both cases (it carries the RequestId).
+func (p *Provider) certreq(ctx context.Context, phase certreqPhase, args ...string) (string, *Result) {
+	stdout, stderr, code, err := p.runner.Run(ctx, "certreq.exe", args...)
 	if err == nil && code == 0 {
-		return nil
+		return stdout, nil
 	}
 	status := classifyToolError(phase, code, err)
 	var sentinel error
@@ -279,6 +347,31 @@ func (p *Provider) certreq(ctx context.Context, phase certreqPhase, args ...stri
 	}
 	res := &Result{Status: status, Tool: "certreq.exe", ExitCode: code, Stderr: stderr}
 	res.Err = fmt.Errorf("%w: certreq.exe %s failed (exit=%d): %s",
-		sentinel, strings.Join(args, " "), code, strings.TrimSpace(stderr))
-	return res
+		errors.Join(sentinel, err), strings.Join(args, " "), code, strings.TrimSpace(stderr))
+	return stdout, res
+}
+
+// requestIDPattern matches the RequestId line certreq prints for -submit and
+// -retrieve. The label is not localized (observed on it-IT); the disposition
+// text that follows is, so it is never parsed.
+// Only horizontal whitespace is allowed, so the ID must be on the label's own
+// line (CRLF tolerated), and quotes must be paired or absent. Malformed output
+// yields 0: a missing ID is safer than pointing the PKI at the wrong request.
+var requestIDPattern = regexp.MustCompile(`(?m)^[ \t]*RequestId:[ \t]*(?:"(\d+)"|(\d+))[ \t]*\r?$`)
+
+// parseRequestID returns the first RequestId in certreq output, or 0.
+func parseRequestID(stdout string) int {
+	m := requestIDPattern.FindStringSubmatch(stdout)
+	if m == nil {
+		return 0
+	}
+	digits := m[1]
+	if digits == "" {
+		digits = m[2]
+	}
+	id, err := strconv.Atoi(digits)
+	if err != nil || id <= 0 {
+		return 0
+	}
+	return id
 }

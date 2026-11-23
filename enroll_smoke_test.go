@@ -72,10 +72,13 @@ func TestEnroll_Smoke_SubmitFailureCleansUpKey(t *testing.T) {
 		t.Fatalf("expected KeyStateRemoved, got %s (cleanupErr=%v)", res.KeyState, res.KeyCleanupErr)
 	}
 
-	// Prove the shared deletion removed the exact key: reopening the exact name
-	// for deletion reports not-found through the shared primitive, and a
-	// repeated cleanup is therefore safely idempotent.
+	// KeyStateRemoved above comes from the successful first delete. A second
+	// delete of the exact name must report not-found or not accessible: this
+	// caller could not open the key and this call deleted nothing, so a
+	// repeated cleanup is idempotent. It is not proof that the key is absent:
+	// the Software KSP reports NTE_BAD_KEYSET for a key whose DACL denies the
+	// caller as well.
 	if err := windowscng.Delete(res.KeyContainer); !errors.Is(err, windowscng.ErrKeyNotFound) {
-		t.Errorf("expected key container %q to be absent after cleanup, got %v", res.KeyContainer, err)
+		t.Errorf("expected a second delete of key container %q to report not found or not accessible (nothing deleted by this call), got %v", res.KeyContainer, err)
 	}
 }

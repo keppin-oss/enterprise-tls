@@ -48,6 +48,12 @@ func newUUID() (string, error) {
 // (Exportable = FALSE). The module does not subsequently verify either the
 // resulting key export policy or the actual machine-scope ownership of the
 // key, and it never writes private-key material as PEM or PFX.
+//
+// cfg.Template, when non-empty, is written as the CertificateTemplate request
+// attribute in a [RequestAttributes] section. certreq -new resolves the
+// template in Active Directory with the caller's credentials, so the caller
+// needs an identity that the domain recognises: SYSTEM on a domain-joined
+// machine (which presents the computer account) or a domain account.
 func BuildRequestINF(cfg Config, keyContainer string) string {
 	var b strings.Builder
 	b.WriteString("[Version]\n")
@@ -69,9 +75,6 @@ func BuildRequestINF(cfg Config, keyContainer string) string {
 	b.WriteString("KeyUsage = 0xA0\n") // digitalSignature | keyEncipherment
 	b.WriteString("HashAlgorithm = sha256\n")
 	b.WriteString("RequestType = PKCS10\n")
-	if cfg.Template != "" {
-		b.WriteString("CertificateTemplate = " + cfg.Template + "\n")
-	}
 	b.WriteString("\n")
 	b.WriteString("[Extensions]\n")
 	b.WriteString("2.5.29.17 = \"{text}\"\n")
@@ -79,6 +82,15 @@ func BuildRequestINF(cfg Config, keyContainer string) string {
 	b.WriteString("_continue_ = \"ipaddress=127.0.0.1&\"\n")
 	b.WriteString("_continue_ = \"ipaddress=::1\"\n")
 	b.WriteString("2.5.29.37 = \"{text}1.3.6.1.5.5.7.3.1\"\n")
+	// Microsoft documents CertificateTemplate as a request attribute, not as
+	// a [NewRequest] key. Under [NewRequest], "certreq -new" rejected the INF
+	// with ERROR_INVALID_DATA on a test build of Windows, for every template
+	// tried.
+	if cfg.Template != "" {
+		b.WriteString("\n")
+		b.WriteString("[RequestAttributes]\n")
+		b.WriteString("CertificateTemplate = " + cfg.Template + "\n")
+	}
 	return b.String()
 }
 

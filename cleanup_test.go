@@ -4,8 +4,11 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/keppin-oss/cng/windowscng"
 )
 
 type fakeStore struct {
@@ -371,5 +374,55 @@ func TestCaptureCleanupInfo_StoreError(t *testing.T) {
 	_, err := p.captureCleanupInfo(leaf, "c1")
 	if !errors.Is(err, ErrEnrollmentIncomplete) {
 		t.Fatalf("expected ErrEnrollmentIncomplete, got %v", err)
+	}
+}
+
+// A key deletion failure keeps its native NCrypt cause under ErrCleanupFailed.
+func TestRunCleanup_KeyDeleteFailureKeepsNativeCause(t *testing.T) {
+	leaf, info, _ := testLeafAndInfo(t)
+	store, _ := populatedStore(leaf)
+	keys := &fakeKeyRemover{err: fmt.Errorf("delete key: %w", &windowscng.NCryptError{Op: "NCryptDeleteKey", Code: windowscng.NTEPerm})}
+
+	err := runCleanup(store, keys, info)
+	if !errors.Is(err, ErrCleanupFailed) {
+		t.Fatalf("expected ErrCleanupFailed, got %v", err)
+	}
+	if errors.Is(err, errKeyNotFound) {
+		t.Fatalf("permission failure must not be reported as not-found, got %v", err)
+	}
+	var ne *windowscng.NCryptError
+	if !errors.As(err, &ne) || ne.Code != windowscng.NTEPerm {
+		t.Fatalf("expected NCryptError NTE_PERM in the chain, got %v", err)
+	}
+}
+
+// Not-found with its native cause is still absorbed: Uninstall semantics do
+// not change (nil does not prove the key is gone).
+func TestRunCleanup_KeyNotFoundWithNativeCauseStaysNil(t *testing.T) {
+	leaf, info, _ := testLeafAndInfo(t)
+	store, _ := populatedStore(leaf)
+	keys := &fakeKeyRemover{err: fmt.Errorf("%w: %w", errKeyNotFound,
+		&windowscng.NCryptError{Op: "NCryptOpenKey", Code: windowscng.NTEBadKeyset})}
+
+	if err := runCleanup(store, keys, info); err != nil {
+		t.Fatalf("runCleanup should stay idempotent on not-found, got %v", err)
+	}
+}
+
+// Certificate-store failures keep their cause under ErrCleanupFailed.
+func TestRunCleanup_StoreFailureKeepsCause(t *testing.T) {
+	leaf, info, _ := testLeafAndInfo(t)
+	cause := errors.New("CertDeleteCertificateFromStore: access denied")
+	for name, mutate := range map[string]func(*fakeStore){
+		"find":    func(s *fakeStore) { s.findErr = cause },
+		"keyprov": func(s *fakeStore) { s.keyErr = cause },
+		"delete":  func(s *fakeStore) { s.delErr = cause },
+	} {
+		store, _ := populatedStore(leaf)
+		mutate(store)
+		err := runCleanup(store, &fakeKeyRemover{}, info)
+		if !errors.Is(err, ErrCleanupFailed) || !errors.Is(err, cause) {
+			t.Errorf("%s: expected ErrCleanupFailed wrapping the cause, got %v", name, err)
+		}
 	}
 }

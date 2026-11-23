@@ -99,7 +99,7 @@ func reportFailure(result *enterprise.Result, err error) {
 	case errors.Is(err, enterprise.ErrNotConfigured):
 		fmt.Fprintln(os.Stderr, "classification: not configured")
 	case errors.Is(err, enterprise.ErrUnavailable):
-		fmt.Fprintln(os.Stderr, "classification: tool or CA unavailable")
+		fmt.Fprintln(os.Stderr, "classification: enrollment tool missing")
 	case errors.Is(err, enterprise.ErrEnrollmentFailed):
 		fmt.Fprintln(os.Stderr, "classification: enrollment failed")
 	case errors.Is(err, enterprise.ErrInvalidCertificate):
@@ -109,6 +109,9 @@ func reportFailure(result *enterprise.Result, err error) {
 		if result.Cleanup != nil {
 			fmt.Fprintln(os.Stderr, "retain retry cleanup metadata for later safe uninstall")
 		}
+	case errors.Is(err, enterprise.ErrEnrollmentPending):
+		fmt.Fprintf(os.Stderr, "classification: pending at %s, RequestId %d; key %s retained, files in %s\n",
+			result.CA, result.RequestID, result.KeyContainer, result.ArtifactDirectory)
 	default:
 		fmt.Fprintln(os.Stderr, "classification: unclassified:", err)
 	}

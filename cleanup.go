@@ -59,6 +59,7 @@ type keyProvInfo struct {
 	containerName string
 	providerType  uint32
 	keySpec       uint32
+	flags         uint32
 }
 
 // certStore abstracts the LocalMachine\My certificate-store operations needed
@@ -108,7 +109,7 @@ func Uninstall(info CleanupInfo) error {
 func runCleanup(store certStore, keys keyRemover, info CleanupInfo) error {
 	fp, err := decodeSHA256(info.LeafSHA256)
 	if err != nil {
-		return fmt.Errorf("%w: invalid persisted leaf fingerprint: %v", ErrCleanupFailed, err)
+		return fmt.Errorf("%w: invalid persisted leaf fingerprint: %w", ErrCleanupFailed, err)
 	}
 
 	der, err := store.FindLeafBySHA256(fp)
@@ -116,12 +117,12 @@ func runCleanup(store certStore, keys keyRemover, info CleanupInfo) error {
 		return removeOrphanKey(keys, info)
 	}
 	if err != nil {
-		return fmt.Errorf("%w: find leaf certificate: %v", ErrCleanupFailed, err)
+		return fmt.Errorf("%w: find leaf certificate: %w", ErrCleanupFailed, err)
 	}
 
 	cert, err := x509.ParseCertificate(der)
 	if err != nil {
-		return fmt.Errorf("%w: parse stored certificate: %v", ErrCleanupFailed, err)
+		return fmt.Errorf("%w: parse stored certificate: %w", ErrCleanupFailed, err)
 	}
 	if !info.matches(cert) {
 		return fmt.Errorf("%w: certificate identity does not match persisted metadata", ErrOwnershipMismatch)
@@ -132,7 +133,7 @@ func runCleanup(store certStore, keys keyRemover, info CleanupInfo) error {
 		return removeOrphanKey(keys, info)
 	}
 	if err != nil {
-		return fmt.Errorf("%w: read key association: %v", ErrCleanupFailed, err)
+		return fmt.Errorf("%w: read key association: %w", ErrCleanupFailed, err)
 	}
 	if kpi.provider != info.Provider {
 		return fmt.Errorf("%w: key provider %q does not match persisted %q", ErrOwnershipMismatch, kpi.provider, info.Provider)
@@ -151,7 +152,7 @@ func runCleanup(store certStore, keys keyRemover, info CleanupInfo) error {
 		if errors.Is(err, errCertNotFound) {
 			return removeOrphanKey(keys, info)
 		}
-		return fmt.Errorf("%w: delete leaf certificate: %v", ErrCleanupFailed, err)
+		return fmt.Errorf("%w: delete leaf certificate: %w", ErrCleanupFailed, err)
 	}
 
 	return removeKey(keys, info)
@@ -167,7 +168,7 @@ func removeKey(keys keyRemover, info CleanupInfo) error {
 		if errors.Is(err, errKeyNotFound) {
 			return nil
 		}
-		return fmt.Errorf("%w: delete key: %v", ErrCleanupFailed, err)
+		return fmt.Errorf("%w: delete key: %w", ErrCleanupFailed, err)
 	}
 	return nil
 }

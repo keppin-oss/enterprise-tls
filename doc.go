@@ -1,9 +1,15 @@
 // Package enterprise is a standalone Windows Enterprise CA provider for
 // Keppin localhost HTTPS. It requests and independently validates a
 // machine/computer certificate from an Active Directory Certificate Services
-// (AD CS) Enterprise CA using the native certreq.exe workflow.
+// (AD CS) Enterprise CA.
 //
-// This module is deliberately narrow: it does not implement a local-TLS
-// fallback, it does not create or install any local CA, and it contains no
-// fallback/orchestration policy. Those concerns are external to this module.
+// Enrollment runs through lifecycle.Enrollment with the native adapters of
+// this package: CNGKeys, NativeRequester (Go CSR, in-process ICertRequest),
+// MachineMy, AttemptDeleter and EnrollmentValidator. No child process is
+// started. The certreq.exe Provider is
+// deprecated.
+//
+// The lifecycle subpackage provides the durable enrollment state machine,
+// process guards, consumer-side activation fencing and terminal cleanup.
+// Local-TLS fallback, local CA creation and TLS serving remain consumer concerns.
 package enterprise
