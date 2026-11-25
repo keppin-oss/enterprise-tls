@@ -13,30 +13,32 @@ import (
 	"github.com/keppin-oss/enterprise-tls/lifecycle"
 )
 
-// cngKeyOps is the subset of windowscng v0.4.0 that CNGKeys uses; tests
-// substitute an in-memory KSP.
+// cngKeyOps is the subset of windowscng v0.5 that CNGKeys uses. It is typed on
+// ServicePolicy, although windowscng accepts any KeyPolicy, so the adapter can
+// only ever pass the configured service policy. Tests substitute an in-memory
+// KSP.
 type cngKeyOps interface {
-	CreateForService(name string, policy windowscng.ServicePolicy) (windowscng.Signer, error)
-	OpenForService(name string, policy windowscng.ServicePolicy) (windowscng.Signer, error)
-	DeleteForService(name string, policy windowscng.ServicePolicy, expectedSPKI []byte) error
+	Create(name string, policy windowscng.ServicePolicy) (windowscng.Signer, error)
+	Open(name string, policy windowscng.ServicePolicy) (windowscng.Signer, error)
+	Delete(name string, policy windowscng.ServicePolicy, expectedSPKI []byte) error
 }
 
 type nativeKeyOps struct{}
 
-func (nativeKeyOps) CreateForService(name string, p windowscng.ServicePolicy) (windowscng.Signer, error) {
-	return windowscng.CreateForService(name, p)
+func (nativeKeyOps) Create(name string, p windowscng.ServicePolicy) (windowscng.Signer, error) {
+	return windowscng.Create(name, p)
 }
 
-func (nativeKeyOps) OpenForService(name string, p windowscng.ServicePolicy) (windowscng.Signer, error) {
-	return windowscng.OpenForService(name, p)
+func (nativeKeyOps) Open(name string, p windowscng.ServicePolicy) (windowscng.Signer, error) {
+	return windowscng.Open(name, p)
 }
 
-func (nativeKeyOps) DeleteForService(name string, p windowscng.ServicePolicy, spki []byte) error {
-	return windowscng.DeleteForService(name, p, spki)
+func (nativeKeyOps) Delete(name string, p windowscng.ServicePolicy, spki []byte) error {
+	return windowscng.Delete(name, p, spki)
 }
 
 // CNGKeys implements lifecycle.KeyStore and the key part of the enrollment
-// cleanup with cng v0.4.0. The policy is
+// cleanup with cng v0.5. The policy is
 // the ServicePolicy of the configured service; an attempt whose TargetSID is
 // not that policy's SID, or whose provider is not the Microsoft Software KSP,
 // is refused before any CNG call.
@@ -81,7 +83,7 @@ func (k *CNGKeys) Create(_ context.Context, a lifecycle.Attempt) (lifecycle.KeyH
 	if err := k.check(a.Provider, a.Container, a.TargetSID); err != nil {
 		return nil, err
 	}
-	s, err := k.ops.CreateForService(a.Container, k.policy)
+	s, err := k.ops.Create(a.Container, k.policy)
 	if errors.Is(err, windowscng.ErrKeyExists) {
 		return nil, fmt.Errorf("%w: %w", lifecycle.ErrKeyExists, err)
 	}
@@ -97,14 +99,14 @@ func (k *CNGKeys) Open(_ context.Context, a lifecycle.Attempt) (lifecycle.KeyHan
 	if err := k.check(a.Provider, a.Container, a.TargetSID); err != nil {
 		return nil, err
 	}
-	s, err := k.ops.OpenForService(a.Container, k.policy)
+	s, err := k.ops.Open(a.Container, k.policy)
 	if err != nil {
 		return nil, err
 	}
 	return s, nil
 }
 
-// Delete deletes a key artifact with DeleteForService, which verifies policy
+// Delete deletes a key artifact with windowscng.Delete, which verifies policy
 // and SPKI on the handle it deletes. The artifact must carry the DER public
 // key whose SHA-256 is its SPKI. A missing key is NOT_FOUND_UNVERIFIED, a key
 // that fails verification is SKIPPED_NOT_OWNED: in both cases nothing was
@@ -123,7 +125,7 @@ func (k *CNGKeys) Delete(_ context.Context, art lifecycle.Artifact) error {
 	if _, err := x509.ParsePKIXPublicKey(der); err != nil {
 		return fmt.Errorf("%w: recorded public key unreadable: %v", lifecycle.ErrNotOwned, err)
 	}
-	err = k.ops.DeleteForService(art.Container, k.policy, bytes.Clone(der))
+	err = k.ops.Delete(art.Container, k.policy, bytes.Clone(der))
 	switch {
 	case err == nil:
 		return nil

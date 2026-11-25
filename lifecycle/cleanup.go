@@ -89,7 +89,7 @@ type Cleanup struct {
 }
 
 // Deleter must verify ownership against Artifact on the same native object it
-// deletes; name-only deletion and legacy Uninstall are not implementations.
+// deletes; name-only deletion is not an implementation.
 // It must finish all effects before returning, including on cancellation.
 type Deleter interface {
 	Delete(context.Context, Artifact) error

@@ -2,7 +2,7 @@
 // policy using synthetic in-memory fixtures (a self-signed root CA and a
 // matching localhost leaf certificate).
 //
-// It does not touch the machine certificate store, CNG, certreq.exe, or any
+// It does not touch the machine certificate store, CNG, the CA, or any
 // trust store, and it does not weaken trust or identity verification. It uses
 // the real public validation entry point enterprise.ValidateCertificate with an
 // explicit injected trust root, so the strict localhost/key/trust checks are

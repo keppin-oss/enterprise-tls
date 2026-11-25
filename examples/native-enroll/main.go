@@ -1,6 +1,5 @@
 // Command native-enroll shows how to wire lifecycle.Enrollment to the native
-// adapters, which replace the deprecated
-// Provider.Enroll.
+// adapters.
 //
 // This is a demonstrative example, not a production broker. When run with a
 // valid CA it performs a real enrollment as LocalSystem: it creates a machine

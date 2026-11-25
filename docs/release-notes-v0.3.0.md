@@ -65,7 +65,7 @@
   a blocked call returns the new `ErrOperationBlocked`.
 - New `Result` fields: `ArtifactDirectory`, `CA`, `RequestID`.
 
-See [Upgrading from v0.2.0](README.md#16-upgrading-from-v020).
+See [Upgrading from v0.2.0](README.md#15-upgrading-from-v020).
 
 ## Compatibility
 

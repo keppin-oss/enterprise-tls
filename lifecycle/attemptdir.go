@@ -28,7 +28,7 @@ var ErrAttemptDirUnsupported = errors.New("the protected attempt directory requi
 const (
 	attemptsName = "attempts"
 	// attemptDirSDDL is the private broker descriptor, inheritable so that
-	// files certreq creates get SYSTEM and Administrators full control only.
+	// files created in it get SYSTEM and Administrators full control only.
 	attemptDirSDDL = "O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
 )
 
@@ -49,7 +49,7 @@ func validAttemptID(id string) bool {
 // validFileName accepts a single path component made of ASCII letters,
 // digits, '.', '-' and '_', not "." or "..", with no trailing dot and no
 // Win32 reserved device base name: no separators, streams, devices or Win32
-// name normalization, so the Win32 path given to certreq and the NT name
+// name normalization, so a Win32 path built from the name and the NT name
 // opened relative to the held directory designate the same file.
 func validFileName(name string) bool {
 	if name == "" || len(name) > 128 || name == "." || name == ".." || strings.HasSuffix(name, ".") {

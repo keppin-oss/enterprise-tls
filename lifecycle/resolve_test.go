@@ -12,7 +12,7 @@ func testResolver(j Journal) Resolver {
 	return Resolver{Journal: j, Now: func() time.Time { return resolvedAt }}
 }
 
-var adminStatement = Resolution{Actor: `EXAMPLE\admin`, Reason: "host rebooted; no certreq process", Evidence: "ticket 42"}
+var adminStatement = Resolution{Actor: `EXAMPLE\admin`, Reason: "host rebooted; no enrollment process", Evidence: "ticket 42"}
 
 // A resolution clears exactly the named latch; the plan then closes
 // incomplete without repeating the uncertain delete, and other plans run.
@@ -83,7 +83,7 @@ func TestResolveCleanupIsPerPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := ProcessGuard{Journal: j}
-	if err := g.Run(ctx, "certreq", nil, func() error { return nil }); !errors.Is(err, ErrUncertainCleanup) {
+	if err := g.Run(ctx, "native-op", nil, func() error { return nil }); !errors.Is(err, ErrUncertainCleanup) {
 		t.Fatalf("guard ran with plan B latched: %v", err)
 	}
 }
@@ -94,7 +94,7 @@ func TestResolveOperationUnblocksGuard(t *testing.T) {
 	j := newTestJournal()
 	g := ProcessGuard{Journal: j}
 	calls := 0
-	if err := g.Run(ctx, "certreq", []string{"-submit"}, func() error { calls++; return ErrQuiescence }); !errors.Is(err, ErrQuiescence) {
+	if err := g.Run(ctx, "native-op", []string{"-submit"}, func() error { calls++; return ErrQuiescence }); !errors.Is(err, ErrQuiescence) {
 		t.Fatal(err)
 	}
 	r := testResolver(j)
@@ -114,7 +114,7 @@ func TestResolveOperationUnblocksGuard(t *testing.T) {
 	if err := r.ResolveOperation(ctx, 1, Resolution{Actor: "other", Reason: "x"}); !errors.Is(err, ErrNothingToResolve) {
 		t.Fatal(err)
 	}
-	if err := g.Run(ctx, "certreq", []string{"-retrieve"}, func() error { calls++; return nil }); err != nil {
+	if err := g.Run(ctx, "native-op", []string{"-retrieve"}, func() error { calls++; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 2 || j.state.Operation.Sequence != 2 || j.state.Operation.Resolution != nil {
@@ -126,11 +126,11 @@ func TestResolveOperationUnblocksGuard(t *testing.T) {
 func TestResolveOperationKeepsCleanupLatch(t *testing.T) {
 	j := newTestJournal()
 	latchCleanup(t, j, "A")
-	j.state.Operation = &Operation{Sequence: 1, Name: "certreq"}
+	j.state.Operation = &Operation{Sequence: 1, Name: "native-op"}
 	if err := testResolver(j).ResolveOperation(ctx, 1, adminStatement); err != nil {
 		t.Fatal(err)
 	}
-	if err := (ProcessGuard{Journal: j}).Run(ctx, "certreq", nil, func() error { return nil }); !errors.Is(err, ErrUncertainCleanup) {
+	if err := (ProcessGuard{Journal: j}).Run(ctx, "native-op", nil, func() error { return nil }); !errors.Is(err, ErrUncertainCleanup) {
 		t.Fatalf("cleanup latch cleared by operation resolution: %v", err)
 	}
 }
@@ -138,7 +138,7 @@ func TestResolveOperationKeepsCleanupLatch(t *testing.T) {
 func TestJournalRejectsForgedResolutions(t *testing.T) {
 	j := newTestJournal()
 	latchCleanup(t, j, "A")
-	j.state.Operation = &Operation{Sequence: 1, Name: "certreq"}
+	j.state.Operation = &Operation{Sequence: 1, Name: "native-op"}
 	prev := cloneState(j.state)
 	res := adminStatement
 	res.At = resolvedAt
@@ -212,7 +212,7 @@ func TestJournalRejectsForgedResolutions(t *testing.T) {
 		"operation resolution dropped": func(s *State) { s.Operation.Resolution = nil },
 		"operation resolution changed": func(s *State) { s.Operation.Resolution.Reason = "other" },
 		"new operation with resolution": func(s *State) {
-			s.Operation = &Operation{Sequence: 2, Name: "certreq", Quiescent: true, Resolution: &res}
+			s.Operation = &Operation{Sequence: 2, Name: "native-op", Quiescent: true, Resolution: &res}
 		},
 	} {
 		next := cloneState(prev)
@@ -255,7 +255,7 @@ func TestRetriedResolutionLeavesNewerLatch(t *testing.T) {
 	if !plan.QuiescenceUnknown || len(plan.Resolutions) != 1 {
 		t.Fatalf("retry cleared the newer latch: %+v", plan)
 	}
-	if err := (ProcessGuard{Journal: j}).Run(ctx, "certreq", nil, func() error { return nil }); !errors.Is(err, ErrUncertainCleanup) {
+	if err := (ProcessGuard{Journal: j}).Run(ctx, "native-op", nil, func() error { return nil }); !errors.Is(err, ErrUncertainCleanup) {
 		t.Fatalf("barrier lifted by retry: %v", err)
 	}
 	if err := r.ResolveCleanup(ctx, "A", 0, Resolution{Actor: "other", Reason: "x"}); !errors.Is(err, ErrNothingToResolve) {
@@ -279,7 +279,7 @@ func TestFirstOrdinaryFrameCannotCarryResolutions(t *testing.T) {
 	res.At = resolvedAt
 	op := emptyState()
 	op.Revision = 1
-	op.Operation = &Operation{Sequence: 1, Name: "certreq", Quiescent: true, Resolution: &res}
+	op.Operation = &Operation{Sequence: 1, Name: "native-op", Quiescent: true, Resolution: &res}
 	plan := emptyState()
 	plan.Revision = 1
 	plan.Cleanups["A"] = Cleanup{ID: "A", Outcome: Aborted, Resolutions: []Resolution{res},

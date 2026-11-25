@@ -5,10 +5,10 @@ independently validates, and installs a localhost certificate from an Active
 Directory Certificate Services (AD CS) Enterprise CA, and reports a durable,
 structured outcome to the caller.
 
-Since v0.3.0 enrollment runs in process, with no child process: a CNG key, a
-CSR built in Go and the in-process `ICertRequest` client, driven by the durable
-state machine in the `lifecycle` package. The `certreq.exe` workflow of earlier
-versions is deprecated.
+Enrollment runs in process, with no child process: a CNG key, a CSR built in
+Go and the in-process `ICertRequest` client, driven by the durable state
+machine in the `lifecycle` package. The `certreq.exe` workflow of earlier
+versions was removed in v0.4.0.
 
 The supported target is Windows/amd64.
 
@@ -33,6 +33,7 @@ certificate validator.
 ## Resources
 
 - [Technical documentation](docs/README.md)
+- [Release notes v0.4.0](docs/release-notes-v0.4.0.md)
 - [Release notes v0.3.0](docs/release-notes-v0.3.0.md)
 - [Examples](examples/)
 

@@ -119,7 +119,7 @@ func openPrivateDir(parent windows.Handle, name string, disposition uint32) (win
 
 // checkAttemptDirACL is the private broker descriptor with both ACEs
 // inheritable by files and subdirectories (OI|CI, nothing else), so that
-// every file certreq creates inherits SYSTEM and Administrators only.
+// every file created in it inherits SYSTEM and Administrators only.
 func checkAttemptDirACL(h windows.Handle) error {
 	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT,
 		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
