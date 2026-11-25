@@ -128,7 +128,7 @@ func TestConsumerJournalCannotAuthorizeBrokerWrites(t *testing.T) {
 	}
 	j := &FileJournal{state: emptyState(), activationOnly: true}
 	s := emptyState()
-	s.Operation = &Operation{Sequence: 1, Name: "certreq"}
+	s.Operation = &Operation{Sequence: 1, Name: "native-op"}
 	if err := (fileTransaction{j}).Save(s); err == nil {
 		t.Fatal("consumer journal allowed native-operation authority")
 	}
@@ -353,8 +353,9 @@ func TestProtectedNTFSJournalRecoveryKeepsFilesWhenInvalid(t *testing.T) {
 	mustFail(journalName, journalOld, journalTmp)
 }
 
-// writeProtected writes a file with the broker journal descriptor, so that
-// recovery reaches the frame checks instead of failing on inherited ACEs.
+// writeProtected writes a file with the broker journal descriptor, owner
+// included, so that recovery reaches the frame checks instead of failing on
+// inherited ACEs or on the default owner the creating token assigns.
 func writeProtected(t *testing.T, path string, data []byte) {
 	t.Helper()
 	if err := os.WriteFile(path, data, 0600); err != nil {
@@ -364,12 +365,17 @@ func writeProtected(t *testing.T, path string, data []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	owner, _, err := sd.Owner()
+	if err != nil {
+		t.Fatal(err)
+	}
 	dacl, _, err := sd.DACL()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
-		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
+		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		owner, nil, dacl, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := withHandle(path, func(h windows.Handle) error { return checkJournalFile(h, "") }); err != nil {

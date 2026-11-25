@@ -5,11 +5,16 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
 	"time"
 )
+
+// ErrInvalidCertificate indicates the returned certificate material is
+// invalid, untrusted, or mismatched.
+var ErrInvalidCertificate = errors.New("returned certificate is invalid, untrusted, or mismatched")
 
 // serverAuthOID is the Server Authentication EKU OID (1.3.6.1.5.5.7.3.1).
 const serverAuthOID = "1.3.6.1.5.5.7.3.1"

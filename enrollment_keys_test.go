@@ -30,7 +30,7 @@ type fakeKSP struct {
 	deleted   []byte
 }
 
-func (f *fakeKSP) CreateForService(name string, p windowscng.ServicePolicy) (windowscng.Signer, error) {
+func (f *fakeKSP) Create(name string, p windowscng.ServicePolicy) (windowscng.Signer, error) {
 	f.calls = append(f.calls, "create "+name+" "+p.SID())
 	if f.createErr != nil {
 		return nil, f.createErr
@@ -38,7 +38,7 @@ func (f *fakeKSP) CreateForService(name string, p windowscng.ServicePolicy) (win
 	return ecSigner{f.key}, nil
 }
 
-func (f *fakeKSP) OpenForService(name string, p windowscng.ServicePolicy) (windowscng.Signer, error) {
+func (f *fakeKSP) Open(name string, p windowscng.ServicePolicy) (windowscng.Signer, error) {
 	f.calls = append(f.calls, "open "+name+" "+p.SID())
 	if f.openErr != nil {
 		return nil, f.openErr
@@ -46,7 +46,7 @@ func (f *fakeKSP) OpenForService(name string, p windowscng.ServicePolicy) (windo
 	return ecSigner{f.key}, nil
 }
 
-func (f *fakeKSP) DeleteForService(name string, p windowscng.ServicePolicy, spki []byte) error {
+func (f *fakeKSP) Delete(name string, p windowscng.ServicePolicy, spki []byte) error {
 	f.calls = append(f.calls, "delete "+name+" "+p.SID())
 	f.deleted = spki
 	return f.deleteErr

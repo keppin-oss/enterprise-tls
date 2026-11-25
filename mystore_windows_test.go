@@ -85,8 +85,8 @@ func removeFromUserMy(t *testing.T, m MachineMy, certHash string) {
 		return
 	}
 	// CertDeleteCertificateFromStore frees the context.
-	if r, _, e := procCertDeleteCertificateFromStore.Call(uintptr(unsafe.Pointer(c))); r == 0 {
-		t.Errorf("cleanup: delete certificate: %v", e)
+	if err := windows.CertDeleteCertificateFromStore(c); err != nil {
+		t.Errorf("cleanup: delete certificate: %v", err)
 	}
 }
 
