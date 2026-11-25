@@ -1,9 +1,13 @@
 package enterprise
 
 import (
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 )
+
+// expectedCNGProvider is the only CNG key storage provider this module creates,
+// binds and deletes keys in.
+const expectedCNGProvider = "Microsoft Software Key Storage Provider"
 
 // stripASCIIWhitespace removes spaces, tabs, CR and LF from a byte slice.
 func stripASCIIWhitespace(b []byte) []byte {
@@ -18,9 +22,8 @@ func stripASCIIWhitespace(b []byte) []byte {
 	return out
 }
 
-// sha1Thumbprint returns the lowercase hex SHA-1 thumbprint of a DER-encoded
-// certificate, matching the "Thumbprint" shown by Windows cert tools.
-func sha1Thumbprint(der []byte) string {
-	h := sha1.Sum(der)
-	return hex.EncodeToString(h[:])
+// sha256Hex returns the lowercase hex SHA-256 of b.
+func sha256Hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }

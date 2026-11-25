@@ -6,8 +6,7 @@
 // Enrollment runs through lifecycle.Enrollment with the native adapters of
 // this package: CNGKeys, NativeRequester (Go CSR, in-process ICertRequest),
 // MachineMy, AttemptDeleter and EnrollmentValidator. No child process is
-// started. The certreq.exe Provider is
-// deprecated.
+// started and certreq.exe is not used.
 //
 // The lifecycle subpackage provides the durable enrollment state machine,
 // process guards, consumer-side activation fencing and terminal cleanup.

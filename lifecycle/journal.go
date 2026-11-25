@@ -22,7 +22,8 @@ var (
 )
 
 // schema 2: native enrollment records. A
-// schema 1 journal, written by the certreq machine, is refused, not migrated.
+// schema 1 journal, written by the removed certreq.exe path, is refused, not
+// migrated.
 const schema = 2
 const maxFrame = 16 << 20
 

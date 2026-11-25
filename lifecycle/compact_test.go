@@ -185,7 +185,7 @@ func TestCompactWithoutRetentionKeepsEverything(t *testing.T) {
 	j.replace = r.replace
 	seedJournal(t, j)
 	latchCleanup(t, j, "latched")
-	if err := (ProcessGuard{Journal: j}).Run(ctx, "certreq", nil, func() error { return ErrQuiescence }); !errors.Is(err, ErrQuiescence) {
+	if err := (ProcessGuard{Journal: j}).Run(ctx, "native-op", nil, func() error { return ErrQuiescence }); !errors.Is(err, ErrQuiescence) {
 		t.Fatal(err)
 	}
 	before := j.state
@@ -201,7 +201,7 @@ func TestCompactWithoutRetentionKeepsEverything(t *testing.T) {
 	if err := (Cleaner{Journal: j, Deleter: &testDeleter{}}).Resume(ctx, "recent"); err != nil {
 		t.Fatal(err) // terminal complete plan still reports its outcome
 	}
-	if err := (ProcessGuard{Journal: j}).Run(ctx, "certreq", nil, func() error { return nil }); !errors.Is(err, ErrUncertainCleanup) {
+	if err := (ProcessGuard{Journal: j}).Run(ctx, "native-op", nil, func() error { return nil }); !errors.Is(err, ErrUncertainCleanup) {
 		t.Fatalf("latch lost by compaction: %v", err)
 	}
 }

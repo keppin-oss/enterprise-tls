@@ -129,7 +129,7 @@ func TestCleanupBlocksOnUnfinishedNativeOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := ProcessGuard{Journal: j}
-	if err := g.Run(ctx, "certreq", nil, func() error { return ErrQuiescence }); !errors.Is(err, ErrQuiescence) {
+	if err := g.Run(ctx, "native-op", nil, func() error { return ErrQuiescence }); !errors.Is(err, ErrQuiescence) {
 		t.Fatal(err)
 	}
 	if err := c.Resume(ctx, "attempt"); !errors.Is(err, ErrQuiescence) {
@@ -398,10 +398,10 @@ func TestProcessGuardBlocksAfterCrashWithoutTreeEvidence(t *testing.T) {
 	g := ProcessGuard{Journal: j}
 	calls := 0
 	effect := func() error { calls++; return ErrQuiescence }
-	if err := g.Run(ctx, "certreq", []string{"-new"}, effect); !errors.Is(err, ErrQuiescence) {
+	if err := g.Run(ctx, "native-op", []string{"-new"}, effect); !errors.Is(err, ErrQuiescence) {
 		t.Fatal(err)
 	}
-	if err := g.Run(ctx, "certreq", []string{"-accept"}, effect); !errors.Is(err, ErrQuiescence) {
+	if err := g.Run(ctx, "native-op", []string{"-accept"}, effect); !errors.Is(err, ErrQuiescence) {
 		t.Fatal(err)
 	}
 	if calls != 1 {
@@ -409,14 +409,14 @@ func TestProcessGuardBlocksAfterCrashWithoutTreeEvidence(t *testing.T) {
 	}
 	q := &testQuiescer{err: context.DeadlineExceeded}
 	g.Recovery = q
-	if err := g.Run(ctx, "certreq", nil, effect); !errors.Is(err, ErrQuiescence) {
+	if err := g.Run(ctx, "native-op", nil, effect); !errors.Is(err, ErrQuiescence) {
 		t.Fatal(err)
 	}
 	if j.state.Operation.Quiescent {
 		t.Fatal("timeout certified quiescence")
 	}
 	q.err = nil
-	if err := g.Run(ctx, "certreq", nil, effect); !errors.Is(err, ErrInterrupted) {
+	if err := g.Run(ctx, "native-op", nil, effect); !errors.Is(err, ErrInterrupted) {
 		t.Fatal(err)
 	}
 	if calls != 1 || !j.state.Operation.Quiescent {
@@ -424,7 +424,7 @@ func TestProcessGuardBlocksAfterCrashWithoutTreeEvidence(t *testing.T) {
 	}
 	// Reconciliation is a separate caller action. Only the next explicit
 	// invocation can start a new operation.
-	if err := g.Run(ctx, "certreq", nil, func() error { calls++; return nil }); err != nil {
+	if err := g.Run(ctx, "native-op", nil, func() error { calls++; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 2 || j.state.Operation.Sequence != 2 {
@@ -438,7 +438,7 @@ func TestProcessGuardIntentAndAcknowledgmentFailures(t *testing.T) {
 		j.failAt = failAt
 		g := ProcessGuard{Journal: j}
 		calls := 0
-		err := g.Run(ctx, "certreq", nil, func() error { calls++; return nil })
+		err := g.Run(ctx, "native-op", nil, func() error { calls++; return nil })
 		if !errors.Is(err, ErrQuiescence) || !errors.Is(err, diskFailure) {
 			t.Fatal(err)
 		}
@@ -562,7 +562,7 @@ func TestUncertainCleanupBlocksProcessGuard(t *testing.T) {
 	q := &testQuiescer{}
 	effects := 0
 	g := ProcessGuard{Journal: j, Recovery: q}
-	err := g.Run(ctx, "certreq", nil, func() error { effects++; return nil })
+	err := g.Run(ctx, "native-op", nil, func() error { effects++; return nil })
 	if !errors.Is(err, ErrQuiescence) || !errors.Is(err, ErrUncertainCleanup) {
 		t.Fatalf("guard ignored uncertain cleanup: %v", err)
 	}
@@ -680,7 +680,7 @@ func TestMixedLatchesReportUncertainCleanup(t *testing.T) {
 	}
 	// Inject the pre-barrier state directly: an unfinished operation recorded
 	// after the cleanup latch.
-	j.state.Operation = &Operation{Sequence: 1, Name: "certreq"}
+	j.state.Operation = &Operation{Sequence: 1, Name: "native-op"}
 
 	consumer := &testConsumer{}
 	a := Activator{j, consumer}
@@ -691,7 +691,7 @@ func TestMixedLatchesReportUncertainCleanup(t *testing.T) {
 		"apply":   func() error { return a.Apply(ctx, Activation{1, hashA}) },
 		"recover": func() error { return a.Recover(ctx) },
 		"guard": func() error {
-			return ProcessGuard{Journal: j, Recovery: q}.Run(ctx, "certreq", nil, func() error { effects++; return nil })
+			return ProcessGuard{Journal: j, Recovery: q}.Run(ctx, "native-op", nil, func() error { effects++; return nil })
 		},
 	} {
 		if err := run(); !errors.Is(err, ErrQuiescence) || !errors.Is(err, ErrUncertainCleanup) {

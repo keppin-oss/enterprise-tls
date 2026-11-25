@@ -17,8 +17,7 @@ import (
 // Native adapters for lifecycle.Enrollment.
 // The key adapter is CNGKeys (enrollment_keys.go), the requester is
 // NativeRequester (enrollment_requester.go, ICertRequest in ca_com_windows.go)
-// and the store is MachineMy (mystore_windows.go). certreq.exe is not part of
-// the lifecycle path.
+// and the store is MachineMy (mystore_windows.go).
 
 const maxListedFile = 1 << 20 // any file hashed for the cleanup inventory
 

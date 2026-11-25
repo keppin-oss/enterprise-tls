@@ -128,7 +128,7 @@ func TestConsumerJournalCannotAuthorizeBrokerWrites(t *testing.T) {
 	}
 	j := &FileJournal{state: emptyState(), activationOnly: true}
 	s := emptyState()
-	s.Operation = &Operation{Sequence: 1, Name: "certreq"}
+	s.Operation = &Operation{Sequence: 1, Name: "native-op"}
 	if err := (fileTransaction{j}).Save(s); err == nil {
 		t.Fatal("consumer journal allowed native-operation authority")
 	}
